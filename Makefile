@@ -1,5 +1,5 @@
 PREFIX = /usr/local
-BIN = macchanger
+BIN = automacchanger
 
 install:
 	cp -f bin/$(BIN) $(PREFIX)/bin/$(BIN)
