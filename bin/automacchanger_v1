@@ -1,0 +1,121 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'timeout'
+
+options = {}
+VERSION = '1.4.1'
+
+optparse = OptionParser.new do |opts|
+  opts.banner = 'Usage: macchanger [options] device'
+
+  opts.on('-v', '--version', 'Displays MacChanger version') do
+    puts "Version: #{VERSION}"
+    exit
+  end
+
+  opts.on('-m', '--mac MAC', 'Set the MAC address, macchanger -m XX:XX:XX:XX:XX:XX en0') do |m|
+    options[:mac] = m.downcase
+  end
+
+  opts.on('-r', '--random', 'Set random MAC address, macchanger -r en0') do
+    options[:random] = true
+  end
+
+  opts.on('-f', '--frequency SECONDS', Integer, 'Set the frequency of MAC address change in seconds') do |f|
+    options[:frequency] = f
+  end
+
+  opts.on('-s', '--show', 'Show the MAC address, macchanger -s en0') do |s|
+    options[:show] = true
+  end
+end
+
+class MacChanger
+  def self.show(device)
+    show = `/sbin/ifconfig #{device} |grep ether`
+    show[7, 17]
+  end
+
+  def self.generate
+    [format('%0.2x', rand(256) & ~1), (1..5).map { format('%0.2x', rand(256)) }].join(':')
+  end
+
+  def self.valid?(mac)
+    unless mac.match(/^([0-9a-fA-F][0-9a-fA-F]:){5}([0-9a-fA-F][0-9a-fA-F])$/)
+      fail OptionParser::InvalidArgument, 'Mac address is not valid'
+    end
+  end
+
+  def self.down?(device)
+    unless `/sbin/ifconfig -d |grep -E '^#{device}:'`.empty?
+      fail OptionParser::InvalidArgument, "Device #{device} is down"
+    end
+  end
+
+  def self.random(options)
+    options[:mac] = generate
+    if set(options)
+      puts "Successfully set #{options[:mac]} on #{options[:device]} device"
+    else
+      random(options)
+    end
+  end
+
+  def self.set(options)
+    disconnect(options[:device])
+    success = system("sudo /sbin/ifconfig #{options[:device]} ether #{options[:mac]}")
+    reconnect(options[:device])
+    success
+  end
+
+  def self.disconnect(device)
+    system("sudo /System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport #{device} -z")
+  end
+
+  def self.reconnect(device)
+    system("sudo ifconfig #{device} down")
+    sleep 2
+    system("sudo ifconfig #{device} up")
+  end
+
+  def self.change_mac_address(options)
+    if options[:random]
+      random(options)
+    else
+      if set(options)
+        puts "Successfully set #{options[:mac]} on #{options[:device]} device"
+      else
+        puts 'Try another mac address'
+      end
+    end
+  end
+
+  def self.start(options)
+    loop do
+      change_mac_address(options)
+      sleep options[:frequency] if options[:frequency]
+    end
+  end
+end
+
+begin
+  optparse.parse!
+  options[:device] = ARGV[0] or fail OptionParser::MissingArgument, 'device'
+  MacChanger.down?(options[:device])
+
+  if options[:show]
+    puts "Your mac address is: #{MacChanger.show(options[:device])}"
+  else
+    fail OptionParser::InvalidOption, 'MAC address or random option' if options[:mac].nil? && options[:random].nil?
+    MacChanger.valid?(options[:mac]) unless options[:random]
+    if options[:frequency]
+      MacChanger.start(options)
+    else
+      MacChanger.change_mac_address(options)
+    end
+  end
+rescue OptionParser::InvalidArgument, OptionParser::MissingArgument, OptionParser::InvalidOption => error
+  puts error
+  puts optparse
+end
